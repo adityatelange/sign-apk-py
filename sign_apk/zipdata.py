@@ -10,11 +10,11 @@ Record layouts (EOCD sections 4.3.16, central directory 4.3.12):
     PKWARE .ZIP File Format Specification, APPNOTE 6.3.1
     https://pkware.cachefly.net/webdocs/APPNOTE/APPNOTE-6.3.1.TXT
 
-EOCD scan and field offsets, ported from:
+EOCD scan and field offsets, checked against:
     apksig ZipUtils.findZipEndOfCentralDirectoryRecord()
     platform/tools/apksig/src/main/java/com/android/apksig/internal/zip/ZipUtils.java
 
-Signing block location and header/footer size validation, ported from:
+Signing block location and header/footer size validation, checked against:
     apksig ApkUtilsLite.findApkSigningBlock()
     platform/tools/apksig/src/main/java/com/android/apksig/apk/ApkUtilsLite.java
 

@@ -13,7 +13,7 @@ References
 Algorithm description ("Integrity-protected contents"):
     https://source.android.com/docs/security/features/apksigning/v2
 
-Ported from apksig ApkSigningBlockUtils.computeOneMbChunkContentDigests(),
+Checked against apksig ApkSigningBlockUtils.computeOneMbChunkContentDigests(),
 including the CONTENT_DIGESTED_CHUNK_MAX_SIZE_BYTES = 1024 * 1024 constant
 and the 0xa5 / 0x5a prefix bytes:
     platform/tools/apksig/src/main/java/com/android/apksig/internal/apk/ApkSigningBlockUtils.java

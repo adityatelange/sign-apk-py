@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "sign-apk-py"
 version = "0.1.0"
 readme = "README.md"
-description = "Sign Android APKs with APK Signature Scheme v2, pure Python, no external tools (apksigner/jarsigner/zipalign) required."
+description = "Sign Android APKs with APK Signature Schemes v2, v3, and v4, pure Python, no external tools (apksigner/jarsigner/zipalign) required."
 keywords = ["apk", "sign", "android", "apksigner", "v2"]
 license = {text = "Unlicense"}
 authors = [{name = "Aditya Telange"}]
@@ -19,6 +19,12 @@ dependencies = [
   "cryptography>=41.0",
 ]
 requires-python = ">=3.9"
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.urls]
+Repository = "https://github.com/adityatelange/sign-apk-py"
 
 [project.scripts]
 sign-apk = "sign_apk.cli:main"

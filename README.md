@@ -1,6 +1,6 @@
 # sign-apk-py
 
-Sign Android APKs with **APK Signature Scheme v2**, in pure Python.
+Sign Android APKs with **APK Signature Schemes v2, v3, and v4**, in pure Python.
 
 No `apksigner`, `jarsigner`, `zipalign`, `keytool`, `openssl`, or Android SDK
 required — the only dependency is [`cryptography`](https://cryptography.io)
@@ -31,6 +31,21 @@ sign-apk sign app-unsigned.apk app-signed.apk --p12 release.p12
 sign-apk sign app-unsigned.apk app-signed.apk
 ```
 
+By default both **v2 and v3** blocks are written. Select schemes explicitly
+with `--v2` / `--v3` / `--v4`:
+
+```bash
+# v2 only (for compatibility with Android 7-8 tooling)
+sign-apk sign in.apk out.apk --key k.pem --cert c.crt --v2
+
+# v2 + v3 + a v4 sidecar for incremental install
+sign-apk sign in.apk out.apk --key k.pem --cert c.crt --v2 --v3 --v4
+# -> writes out.apk and out.apk.idsig
+```
+
+`--v4` writes a detached `out.apk.idsig` alongside the APK. It anchors to
+the v2/v3 content digest, so it cannot be used on its own.
+
 ### Generate a signing key
 
 ```bash
@@ -44,8 +59,15 @@ sign-apk verify app-signed.apk
 ```
 
 ```
-VALID (APK Signature Scheme v2)
-  Signer: CN=My Release Key (serial 160075826959434796134124628523294791694)
+VALID (APK Signature Scheme v2+v3)
+  v2 signer: CN=My Release Key
+  v3 signer: CN=My Release Key (SDK 28-2147483647)
+```
+
+To verify a v4 sidecar, use apksigner:
+
+```bash
+apksigner verify --v4-signature-file app-signed.apk.idsig app-signed.apk
 ```
 
 ## What it does
@@ -76,8 +98,12 @@ SHA-256 (`0x0103`), larger ones SHA-512 (`0x0104`); EC keys use SHA-256
 
 ## Scope and limitations
 
-- **v2 only.** No v1 (JAR) signing, so APKs installing on **Android 6 and
-  below will not verify**. No v3 (key rotation) or v4 (incremental install).
+- **No v1 (JAR) signing**, so APKs installing on **Android 6 and below will
+  not verify**. v2 covers Android 7+, v3 Android 9+.
+- **No key rotation.** The v3 block is written with a single signer and no
+  proof-of-rotation lineage, which is the common case for apps that are not
+  rotating keys. Rotation (and the v3.1 block that targets it at a minimum
+  SDK) is not implemented.
 - **One signer per APK.** The format allows several; this writes a single one.
 - **Whole file is read into memory.** Fine for typical APKs (an 89 MB app
   signs in about half a second), but not suited to very large files on
@@ -85,8 +111,10 @@ SHA-256 (`0x0103`), larger ones SHA-512 (`0x0104`); EC keys use SHA-256
 - **No ZIP64.** APKs above 4 GB, or with more than 65535 entries, are not
   supported.
 - `sign-apk verify` is a self-check, not a full reimplementation of Android's
-  verifier — it does not validate certificate chains, expiry, or v3/v4 blocks.
-  Use `apksigner verify` when you need an authoritative answer.
+  verifier. It checks v2 and v3 signatures and content digests, but does not
+  validate certificate chains, expiry, SDK-range coverage across signers,
+  rotation lineages, or v4 sidecars. Use `apksigner verify` when you need an
+  authoritative answer.
 
 ## References
 
@@ -98,14 +126,25 @@ module docstring cites the specific upstream file and function.
   [source.android.com/docs/security/features/apksigning/v2](https://source.android.com/docs/security/features/apksigning/v2)
   — scheme overview, file layout, and the integrity-protected-contents
   digest algorithm.
+- **APK Signature Scheme v3** —
+  [source.android.com/docs/security/features/apksigning/v3](https://source.android.com/docs/security/features/apksigning/v3)
+  — the SDK version range and proof-of-rotation additions to v2.
+- **APK Signature Scheme v4** —
+  [source.android.com/docs/security/features/apksigning/v4](https://source.android.com/docs/security/features/apksigning/v4)
+  — the detached `.idsig` sidecar and its fs-verity Merkle tree.
+- **fs-verity** —
+  [kernel.org/doc/html/latest/filesystems/fsverity.html](https://www.kernel.org/doc/html/latest/filesystems/fsverity.html)
+  — the Merkle tree construction v4 builds on.
 - **AOSP `apksig`** —
   [android.googlesource.com/platform/tools/apksig](https://android.googlesource.com/platform/tools/apksig/)
   — the reference implementation, and the authority for every byte layout
-  used here. Chiefly `V2SchemeSigner.java` (signer and signed-data
-  structure), `ApkSigningBlockUtils.java` (signing block framing, chunked
-  digests, alignment padding), `SignatureAlgorithm.java` (algorithm IDs),
-  `ZipUtils.java` (EOCD scan), and `ApkUtilsLite.java` (signing block
-  location).
+  used here. Chiefly `V2SchemeSigner.java` and `V3SchemeSigner.java`
+  (signer and signed-data structure), `V4SchemeSigner.java` /
+  `V4Signature.java` (sidecar format and signed data),
+  `VerityTreeBuilder.java` (Merkle tree), `ApkSigningBlockUtils.java`
+  (signing block framing, chunked digests, alignment padding),
+  `SignatureAlgorithm.java` (algorithm IDs), `ZipUtils.java` (EOCD scan),
+  and `ApkUtilsLite.java` (signing block location).
 - **PKWARE `.ZIP` File Format Specification, APPNOTE 6.3.1** —
   [pkware.cachefly.net/webdocs/APPNOTE/APPNOTE-6.3.1.TXT](https://pkware.cachefly.net/webdocs/APPNOTE/APPNOTE-6.3.1.TXT)
   — local file header, central directory, data descriptor, and EOCD
@@ -123,11 +162,17 @@ specifications. It is not affiliated with or endorsed by Google or PKWARE.
 python -m pytest tests/
 ```
 
-The suite covers RSA and EC signing, PKCS#12 and PEM loading, re-signing,
-content preservation, alignment, and tamper detection. Where `apksigner` is
-on `PATH`, tests additionally assert that it accepts the output and rejects
-tampered files; those tests skip when it is absent.
+The suite covers RSA and EC signing across v2/v3/v4, PKCS#12 and PEM
+loading, re-signing, content preservation, alignment, Merkle tree
+construction, and tamper detection. Where `apksigner` is on `PATH`, tests
+additionally assert that it accepts the output and rejects tampered files;
+those tests skip when it is absent.
+
+One test asserts that our Merkle tree reproduces `apksigner`'s **byte for
+byte** — given the same input file, the tree bytes and root hash match
+exactly.
 
 Verified against Android `apksigner` on a real 89 MB production APK
 (originally v3-signed): all 1622 entries byte-identical after re-signing,
-`zipalign -c -P 16` clean, and `Verified using v2 scheme: true`.
+`zipalign -c -P 16` clean, `v2 scheme: true` on SDK 24-27, and
+`v3 scheme: true` / `v4 scheme: true` on SDK 28+.

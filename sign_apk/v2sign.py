@@ -5,9 +5,9 @@ References
 Scheme overview and file layout:
     https://source.android.com/docs/security/features/apksigning/v2
 
-Byte layouts below are ported from AOSP apksig
-(https://android.googlesource.com/platform/tools/apksig/), under
-src/main/java/com/android/apksig/:
+Byte layouts below were checked against AOSP apksig
+(https://android.googlesource.com/platform/tools/apksig/), Android's
+reference implementation, under src/main/java/com/android/apksig/:
 
     internal/apk/v2/V2SchemeSigner.java
         generateApkSignatureSchemeV2Block(), generateSignerBlock() —
@@ -66,6 +66,10 @@ APK_SIGNING_BLOCK_MAGIC = b"APK Sig Block 42"
 VERITY_PADDING_BLOCK_ID = 0x42726577
 PAGE_ALIGNMENT_BYTES = 4096
 
+# Declares in the v2 block that a v3 block is also present, so stripping the
+# v3 block is detectable by a v2-only verifier.
+STRIPPING_PROTECTION_ATTR_ID = 0xBEEFF00D
+
 # Signature algorithm IDs, from apksig SignatureAlgorithm.java. All of these
 # digest content in 1MB chunks (CHUNKED_SHA256 / CHUNKED_SHA512). Only the
 # PKCS#1 v1.5 and ECDSA variants are emitted by this signer; the PSS IDs are
@@ -104,6 +108,20 @@ def _sequence_of_id_value_pairs(pairs: list) -> bytes:
     out = bytearray()
     for pair_id, value in pairs:
         entry = struct.pack("<I", pair_id) + struct.pack("<I", len(value)) + value
+        out += struct.pack("<I", len(entry))
+        out += entry
+    return bytes(out)
+
+
+def _sequence_of_id_value_pairs_raw(pairs: list) -> bytes:
+    """pairs: list[(uint32 id, bytes value)] -> sequence of
+    { uint32 pair_len ; uint32 id ; value } where pair_len = 4 + len(value).
+
+    Used for additional_attributes, where the value is NOT separately
+    length-prefixed (unlike the digests and signatures lists above)."""
+    out = bytearray()
+    for pair_id, value in pairs:
+        entry = struct.pack("<I", pair_id) + value
         out += struct.pack("<I", len(entry))
         out += entry
     return bytes(out)
@@ -162,12 +180,23 @@ def _select_algorithm(private_key):
 
 
 def build_v2_signature_scheme_block(
-    private_key, certificate, content_sections: list
-) -> bytes:
+    private_key, certificate, content_sections: list, v3_signing_enabled: bool = False
+) -> tuple:
     """Build the value bytes for the APK Signature Scheme v2 Block (ID
     0x7109871a), given the private key, X.509 certificate, and the three
     ordered content sections (before-central-dir, central-dir, eocd) to
-    digest."""
+    digest.
+
+    When `v3_signing_enabled`, the signed data carries the stripping
+    protection attribute declaring that a v3 block is also present, so a
+    v2-only verifier treats removal of the v3 block as tampering. Only set
+    this when a v3 block really is emitted: apksig's v2 verifier reports
+    V2_SIG_MISSING_APK_SIG_REFERENCED if the attribute names a scheme that
+    is not in the APK.
+
+    Returns (block_value, content_digest, algo_id); the digest is reused by
+    the v4 signer, which anchors to a v2/v3 content digest.
+    """
     algo_id, digest_name, sign_fn = _select_algorithm(private_key)
 
     content_digest = digestmod.compute_content_digest(digest_name, content_sections)
@@ -175,7 +204,13 @@ def build_v2_signature_scheme_block(
     digests = _sequence_of_id_value_pairs([(algo_id, content_digest)])
     cert_der = certificate.public_bytes(serialization.Encoding.DER)
     certificates = _sequence_of_length_prefixed([cert_der])
-    additional_attributes = b""  # empty sequence
+
+    if v3_signing_enabled:
+        additional_attributes = _sequence_of_id_value_pairs_raw(
+            [(STRIPPING_PROTECTION_ATTR_ID, struct.pack("<I", 3))]
+        )
+    else:
+        additional_attributes = b""  # empty sequence
 
     signed_data = _sequence_of_length_prefixed(
         [digests, certificates, additional_attributes, b""]
@@ -194,7 +229,8 @@ def build_v2_signature_scheme_block(
     signers_sequence = _sequence_of_length_prefixed([signer])
     # block value: a length-prefixed sequence containing exactly one element,
     # that element being the signers-sequence itself
-    return _sequence_of_length_prefixed([signers_sequence])
+    block_value = _sequence_of_length_prefixed([signers_sequence])
+    return block_value, content_digest, algo_id
 
 
 def assemble_apk_signing_block(id_value_pairs: list) -> bytes:
